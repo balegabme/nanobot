@@ -20,6 +20,7 @@ from nanobot.agent.tools.browser import BrowserTool
 from nanobot.agent.tools.message import MessageTool
 from nanobot.agent.tools.spawn import SpawnTool
 from nanobot.agent.tools.cron import CronTool
+from nanobot.agent.tools.secrets import SecretsTool
 from nanobot.agent.subagent import SubagentManager
 from nanobot.agent.commands import CommandHandler
 from nanobot.session.manager import SessionManager
@@ -118,6 +119,9 @@ class AgentLoop:
         # Cron tool (for scheduling)
         if self.cron_service:
             self.tools.register(CronTool(self.cron_service))
+        
+        # Secrets tool
+        self.tools.register(SecretsTool())
     
     def _get_config_dict(self) -> dict:
         """Get config as dict for command context."""

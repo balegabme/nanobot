@@ -39,7 +39,7 @@ The system follows a **Event-Driven, Bus-Centric Architecture**. It decouples th
 | **Channels**    | `nanobot/channels/`       | Adapters for external chat platforms.                                              | `ChannelManager`, `BaseChannel` |
 | **Skills**      | `nanobot/agent/skills.py` | Implementation of capability loading from Markdown definitions.                    | `SkillsLoader`                  |
 | **Providers**   | `nanobot/providers/`      | Abstraction layer for LLM APIs (OpenRouter, OpenAI, vLLM).                         | `LLMProvider`                   |
-| **Tools**       | `nanobot/agent/tools/`    | Native Python functions exposed to the LLM (File ops, Shell, Search).              | `ToolRegistry`                  |
+| **Tools**       | `nanobot/agent/tools/`    | Native Python functions exposed to the LLM (File, Shell, Web, Browser, Secrets).   | `ToolRegistry`                  |
 
 ---
 
@@ -130,7 +130,44 @@ def cmd_mycommand(args: list[str], ctx: dict[str, Any]) -> CommandResult:
 
 ---
 
-## 7. How to Extend Nanobot
+## 7. Subagents (`agent/subagent.py`)
+
+Subagents are lightweight background agents spawned by the main agent for parallel task execution.
+
+### Lifecycle
+1. Main agent spawns subagent with a task
+2. Subagent runs independently (max 15 iterations)
+3. Subagent reports result back via message bus
+4. Subagent terminates
+
+### Configurable Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `task` | string | The task to complete (required) |
+| `label` | string | Display name |
+| `model` | string | LLM model override (e.g., `gpt-4o-mini` for cost savings) |
+| `system_prompt` | string | Custom instructions |
+| `tools` | array | Tools to enable |
+
+### Available Tools for Subagents
+
+`read_file`, `write_file`, `list_dir`, `exec_shell`, `web_search`, `web_fetch`, `browser`
+
+### Usage Example
+
+```json
+{
+  "task": "Check website for updates",
+  "model": "gpt-4o-mini",
+  "system_prompt": "Only report notable changes",
+  "tools": ["browser", "web_fetch"]
+}
+```
+
+---
+
+## 8. How to Extend Nanobot
 
 ### Adding a New Tool
 
@@ -154,7 +191,7 @@ def cmd_mycommand(args: list[str], ctx: dict[str, Any]) -> CommandResult:
 
 ---
 
-## 8. Configuration Schema Deep Dive
+## 9. Configuration Schema Deep Dive
 
 The configuration is managed via Pydantic models in `nanobot/config/schema.py`. It is crucial to respect the structure defined here when editing `~/.nanobot/config.json`.
 
@@ -165,7 +202,7 @@ The configuration is managed via Pydantic models in `nanobot/config/schema.py`. 
 
 ---
 
-## 9. The "Bootstrap" System
+## 10. The "Bootstrap" System
 
 The agent's personality and instructions are NOT hardcoded in Python. They are loaded from special Markdown files in the workspace root. This allows for rapid iteration on the agent's behavior without touching code.
 
@@ -179,7 +216,7 @@ The agent's personality and instructions are NOT hardcoded in Python. They are l
 
 ---
 
-## 10. Context Construction Lifecycle
+## 11. Context Construction Lifecycle
 
 Understanding _what_ the LLM sees is key to debugging. The `ContextBuilder` (`agent/context.py`) assembles the prompt in this specific order:
 
@@ -195,7 +232,7 @@ This structure ensures the agent prioritizes its core instructions (Identity) wh
 
 ---
 
-## 11. Security Boundaries
+## 12. Security Boundaries
 
 Security is enforced at two layers:
 
@@ -207,7 +244,7 @@ Security is enforced at two layers:
 
 ---
 
-## 12. Multi-Modal Architecture
+## 13. Multi-Modal Architecture
 
 Nanobot is natively multi-modal (text + vision).
 
@@ -221,14 +258,31 @@ Nanobot is natively multi-modal (text + vision).
 
 ---
 
-## 13. Critical Implementation Details
+## 14. Tool Execution Logging
+
+Every tool execution is logged to session-specific files for audit and verification.
+
+- **Location:** `<workspace>/logs/<session_key>.jsonl`
+- **Format:** JSON Lines (one JSON object per line)
+- **Content:** Each entry contains:
+  - `timestamp`: ISO 8601 UTC timestamp
+  - `tool`: Name of the executed tool
+  - `params`: Parameters passed to the tool
+  - `result`: Execution result (truncated to 2000 chars)
+  - `duration_ms`: Execution time in milliseconds
+
+**Implementation:** The `ToolLogger` class (`nanobot/agent/tools/tool_logger.py`) is initialized by `AgentLoop` and passed to `ToolRegistry.execute()` calls.
+
+---
+
+## 15. Critical Implementation Details
 
 - **AsyncIO:** The entire core is async. Do not use blocking calls in the main loop.
 - **Configuration:** `~/.nanobot/config.json` is the source of truth. Config schema is in `nanobot/config/schema.py` (Pydantic).
 - **State:** Conversation state is stored in `nanobot/session/`. It is file-based for simplicity.
 - **Subagents:** The `SpawnTool` allows the agent to create isolated task runners. These share the bus but have their own context.
 
-## 14. Development & Debugging
+## 16. Development & Debugging
 
 - **Logs:** Uses `loguru`. Logs are printed to stderr.
 - **Running locally:**
