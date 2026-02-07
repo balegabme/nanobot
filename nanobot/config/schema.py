@@ -78,6 +78,8 @@ class ProvidersConfig(BaseModel):
     vllm: ProviderConfig = Field(default_factory=ProviderConfig)
     gemini: ProviderConfig = Field(default_factory=ProviderConfig)
     moonshot: ProviderConfig = Field(default_factory=ProviderConfig)
+    opencode: ProviderConfig = Field(default_factory=ProviderConfig)
+    kilocode: ProviderConfig = Field(default_factory=ProviderConfig)
 
 
 class GatewayConfig(BaseModel):
@@ -141,6 +143,9 @@ class Config(BaseSettings):
             "moonshot": self.providers.moonshot,
             "kimi": self.providers.moonshot,
             "vllm": self.providers.vllm,
+            "opencode": self.providers.opencode,
+            "kilocode": self.providers.kilocode,
+            "kilo": self.providers.kilocode,
         }
         for keyword, provider in providers.items():
             if keyword in model and provider.api_key:
@@ -159,7 +164,8 @@ class Config(BaseSettings):
             self.providers.anthropic, self.providers.openai,
             self.providers.gemini, self.providers.zhipu,
             self.providers.moonshot, self.providers.vllm,
-            self.providers.groq,
+            self.providers.groq, self.providers.opencode,
+            self.providers.kilocode,
         ]:
             if provider.api_key:
                 return provider.api_key
@@ -174,6 +180,10 @@ class Config(BaseSettings):
             return self.providers.zhipu.api_base
         if "vllm" in model:
             return self.providers.vllm.api_base
+        if "opencode" in model:
+            return self.providers.opencode.api_base or "https://opencode.ai/zen/v1"
+        if "kilocode" in model or "kilo/" in model:
+            return self.providers.kilocode.api_base or "https://kilocode.ai/api/openrouter"
         return None
     
     class Config:
