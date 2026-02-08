@@ -12,3 +12,5 @@ services:
       - NANOBOT_DEV_MODE=true
       # Prevent Python bytecode caching so restart.bat picks up changes
       - PYTHONDONTWRITEBYTECODE=1
+      # Flush stdout/stderr immediately (no buffering)
+      - PYTHONUNBUFFERED=1

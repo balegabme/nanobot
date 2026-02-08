@@ -11,11 +11,6 @@ from litellm import acompletion
 from nanobot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 
 
-# OpenCode Zen API configuration
-OPENCODE_BASE_URL = "https://opencode.ai/zen/v1"
-OPENCODE_USER_AGENT = "opencode/1.0.0"
-
-
 class LiteLLMProvider(LLMProvider):
     """
     LLM provider using LiteLLM for multi-provider support.
@@ -29,10 +24,26 @@ class LiteLLMProvider(LLMProvider):
     
     def __init__(
         self, 
-        api_key: str | None = None, 
-        api_base: str | None = None,
-        default_model: str = "anthropic/claude-opus-4-5"
+        api_key: str, 
+        api_base: str,
+        default_model: str,
     ):
+        """
+        Initialize the LiteLLM provider.
+        
+        Args:
+            api_key: API key from config (required)
+            api_base: API base URL from config (required)
+            default_model: Default model from config (required)
+        
+        Raises:
+            ValueError: If api_key or default_model is empty/missing
+        """
+        if not api_key:
+            raise ValueError("api_key is required. Configure it in config.json under providers.<provider>.apiKey")
+        if not default_model:
+            raise ValueError("default_model is required. Configure it in config.json under agents.defaults.model")
+        
         super().__init__(api_key, api_base)
         self.default_model = default_model
         
@@ -86,7 +97,8 @@ class LiteLLMProvider(LLMProvider):
             os.environ.setdefault("GROQ_API_KEY", api_key)
         elif "moonshot" in model_lower or "kimi" in model_lower:
             os.environ.setdefault("MOONSHOT_API_KEY", api_key)
-            os.environ.setdefault("MOONSHOT_API_BASE", api_base or "https://api.moonshot.cn/v1")
+            if api_base:
+                os.environ.setdefault("MOONSHOT_API_BASE", api_base)
     
     async def chat(
         self,
@@ -278,8 +290,10 @@ class LiteLLMProvider(LLMProvider):
             )
     
     def _get_opencode_url(self) -> str:
-        """Get OpenCode Zen API URL."""
-        base = self.api_base or OPENCODE_BASE_URL
+        """Get OpenCode Zen API URL from configured api_base."""
+        if not self.api_base:
+            raise ValueError("api_base is required for OpenCode. Configure it in config.json under providers.opencode.apiBase")
+        base = self.api_base
         if not base.endswith("/chat/completions"):
             base = f"{base.rstrip('/')}/chat/completions"
         return base
@@ -289,7 +303,7 @@ class LiteLLMProvider(LLMProvider):
         return {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}",
-            "User-Agent": OPENCODE_USER_AGENT,
+            "User-Agent": "opencode/1.0.0",  # Required for Cloudflare bypass
         }
     
     def _parse_opencode_response(self, result: dict[str, Any]) -> LLMResponse:

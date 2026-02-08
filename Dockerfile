@@ -12,6 +12,14 @@ RUN apt-get update && \
     apt-get autoremove -y && \
     rm -rf /var/lib/apt/lists/*
 
+# Install Playwright system dependencies (BEFORE code copy for caching)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
+        libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 \
+        libxrandr2 libgbm1 libasound2 libpango-1.0-0 libcairo2 && \
+    rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 # Install Python dependencies first (cached layer)
@@ -20,19 +28,13 @@ RUN mkdir -p nanobot bridge && touch nanobot/__init__.py && \
     uv pip install --system --no-cache . && \
     rm -rf nanobot bridge
 
+# Install Playwright browser (after deps install, before code copy for caching)
+RUN playwright install chromium
+
 # Copy the full source and install
 COPY nanobot/ nanobot/
 COPY bridge/ bridge/
 RUN uv pip install --system --no-cache .
-
-# Install Playwright browser (Chromium) and system dependencies
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
-        libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 \
-        libxrandr2 libgbm1 libasound2 libpango-1.0-0 libcairo2 && \
-    rm -rf /var/lib/apt/lists/* && \
-    playwright install chromium
 
 # Build the WhatsApp bridge
 WORKDIR /app/bridge

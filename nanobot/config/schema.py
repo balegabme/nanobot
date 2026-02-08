@@ -172,18 +172,23 @@ class Config(BaseSettings):
         return None
     
     def get_api_base(self, model: str | None = None) -> str | None:
-        """Get API base URL based on model name."""
+        """
+        Get API base URL based on model name.
+        
+        Returns the api_base from the matched provider config.
+        No hardcoded defaults - all values must come from config.json.
+        """
         model = (model or self.agents.defaults.model).lower()
         if "openrouter" in model:
-            return self.providers.openrouter.api_base or "https://openrouter.ai/api/v1"
+            return self.providers.openrouter.api_base
         if any(k in model for k in ("zhipu", "glm", "zai")):
             return self.providers.zhipu.api_base
         if "vllm" in model:
             return self.providers.vllm.api_base
         if "opencode" in model:
-            return self.providers.opencode.api_base or "https://opencode.ai/zen/v1"
+            return self.providers.opencode.api_base
         if "kilocode" in model or "kilo/" in model:
-            return self.providers.kilocode.api_base or "https://kilocode.ai/api/openrouter"
+            return self.providers.kilocode.api_base
         return None
     
     class Config:
