@@ -1,4 +1,4 @@
 @echo off
-echo Restarting nanobot container (code will reload)...
+echo Restarting nanobot container...
 docker-compose -f docker-compose.yml -f docker-compose.dev.yml restart
-echo Done! Check start_dev.bat terminal for logs.
+docker-compose -f docker-compose.yml -f docker-compose.dev.yml logs -f

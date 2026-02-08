@@ -9,6 +9,7 @@ import litellm
 from litellm import acompletion
 
 from nanobot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from nanobot.providers.registry import find_by_model, find_gateway
 
 
 class LiteLLMProvider(LLMProvider):
@@ -18,23 +19,26 @@ class LiteLLMProvider(LLMProvider):
     Supports OpenRouter, Anthropic, OpenAI, Gemini, OpenCode Zen, and many 
     other providers through a unified interface.
     
-    Note: OpenCode Zen requires direct HTTP calls (not LiteLLM) to properly
-    send the User-Agent header needed to bypass Cloudflare protection.
+    Provider-specific logic is driven by the registry (see providers/registry.py).
+    OpenCode Zen requires direct HTTP calls to properly send the User-Agent header
+    needed to bypass Cloudflare protection.
     """
     
     def __init__(
         self, 
         api_key: str, 
-        api_base: str,
-        default_model: str,
+        api_base: str | None = None,
+        default_model: str = "anthropic/claude-opus-4-5",
+        extra_headers: dict[str, str] | None = None,
     ):
         """
         Initialize the LiteLLM provider.
         
         Args:
             api_key: API key from config (required)
-            api_base: API base URL from config (required)
+            api_base: API base URL from config (optional for most providers)
             default_model: Default model from config (required)
+            extra_headers: Custom headers (e.g. APP-Code for AiHubMix)
         
         Raises:
             ValueError: If api_key or default_model is empty/missing
@@ -46,59 +50,88 @@ class LiteLLMProvider(LLMProvider):
         
         super().__init__(api_key, api_base)
         self.default_model = default_model
+        self.extra_headers = extra_headers or {}
         
-        # Provider detection flags
-        self.is_openrouter = self._detect_openrouter(api_key, api_base)
-        self.is_opencode = self._detect_opencode(api_base, default_model)
-        self.is_vllm = bool(api_base) and not self.is_openrouter and not self.is_opencode
+        # Detect gateway / local deployment from api_key and api_base
+        self._gateway = find_gateway(api_key, api_base)
         
-        # Configure environment for LiteLLM
-        self._configure_env(api_key, api_base, default_model)
+        # Backwards-compatible flags (used by tests and possibly external code)
+        self.is_openrouter = bool(self._gateway and self._gateway.name == "openrouter")
+        self.is_aihubmix = bool(self._gateway and self._gateway.name == "aihubmix")
+        self.is_opencode = bool(self._gateway and self._gateway.name == "opencode")
+        self.is_vllm = bool(self._gateway and self._gateway.is_local)
+        
+        # Configure environment variables
+        if api_key:
+            self._setup_env(api_key, api_base, default_model)
         
         if api_base and not self.is_opencode:
             litellm.api_base = api_base
-    
-    def _detect_openrouter(self, api_key: str | None, api_base: str | None) -> bool:
-        """Detect if using OpenRouter provider."""
-        return (
-            (api_key and api_key.startswith("sk-or-")) or
-            (api_base and "openrouter" in api_base)
-        )
-    
-    def _detect_opencode(self, api_base: str | None, model: str) -> bool:
-        """Detect if using OpenCode Zen provider."""
-        return (
-            (api_base and "opencode.ai" in api_base) or
-            model.lower().startswith("opencode/")
-        )
-    
-    def _configure_env(self, api_key: str | None, api_base: str | None, model: str) -> None:
-        """Configure environment variables for LiteLLM based on provider."""
-        if not api_key:
-            return
-            
-        model_lower = model.lower()
         
-        if self.is_openrouter:
-            os.environ["OPENROUTER_API_KEY"] = api_key
-        elif self.is_vllm or self.is_opencode:
-            os.environ["OPENAI_API_KEY"] = api_key
-        elif "deepseek" in model_lower:
-            os.environ.setdefault("DEEPSEEK_API_KEY", api_key)
-        elif "anthropic" in model_lower or "claude" in model_lower:
-            os.environ.setdefault("ANTHROPIC_API_KEY", api_key)
-        elif "openai" in model_lower or "gpt" in model_lower:
-            os.environ.setdefault("OPENAI_API_KEY", api_key)
-        elif "gemini" in model_lower:
-            os.environ.setdefault("GEMINI_API_KEY", api_key)
-        elif any(k in model_lower for k in ("zhipu", "glm", "zai")):
-            os.environ.setdefault("ZHIPUAI_API_KEY", api_key)
-        elif "groq" in model_lower:
-            os.environ.setdefault("GROQ_API_KEY", api_key)
-        elif "moonshot" in model_lower or "kimi" in model_lower:
-            os.environ.setdefault("MOONSHOT_API_KEY", api_key)
-            if api_base:
-                os.environ.setdefault("MOONSHOT_API_BASE", api_base)
+        # Disable LiteLLM logging noise
+        litellm.suppress_debug_info = True
+    
+    def _setup_env(self, api_key: str, api_base: str | None, model: str) -> None:
+        """Set environment variables based on detected provider."""
+        if self._gateway:
+            # Gateway / local: direct set (not setdefault)
+            os.environ[self._gateway.env_key] = api_key
+            return
+        
+        # Standard provider: match by model name
+        spec = find_by_model(model)
+        if spec:
+            os.environ.setdefault(spec.env_key, api_key)
+            # Resolve env_extras placeholders:
+            #   {api_key}  → user's API key
+            #   {api_base} → user's api_base, falling back to spec.default_api_base
+            effective_base = api_base or spec.default_api_base
+            for env_name, env_val in spec.env_extras:
+                resolved = env_val.replace("{api_key}", api_key)
+                resolved = resolved.replace("{api_base}", effective_base)
+                os.environ.setdefault(env_name, resolved)
+    
+    def _resolve_model(self, model: str) -> str:
+        """Resolve model name by applying provider/gateway prefixes."""
+        # OpenCode uses direct HTTP, don't transform model name for LiteLLM
+        if self.is_opencode:
+            # Strip opencode/ prefix if present
+            if model.lower().startswith("opencode/"):
+                model = model.split("/", 1)[1]
+            return model
+        
+        if self._gateway:
+            # Gateway mode: apply gateway prefix, skip provider-specific prefixes
+            prefix = self._gateway.litellm_prefix
+            if self._gateway.strip_model_prefix:
+                model = model.split("/")[-1]
+            if prefix and not model.startswith(f"{prefix}/"):
+                model = f"{prefix}/{model}"
+            return model
+        
+        # Standard mode: auto-prefix for known providers
+        spec = find_by_model(model)
+        if spec and spec.litellm_prefix:
+            if not any(model.startswith(s) for s in spec.skip_prefixes):
+                model = f"{spec.litellm_prefix}/{model}"
+        
+        return model
+    
+    def _apply_model_overrides(self, model: str, kwargs: dict[str, Any]) -> None:
+        """Apply model-specific parameter overrides from the registry."""
+        model_lower = model.lower()
+        spec = find_by_model(model)
+        if spec:
+            for pattern, overrides in spec.model_overrides:
+                if pattern in model_lower:
+                    kwargs.update(overrides)
+                    return
+        # Also check gateway overrides (e.g., opencode kimi-k2.5)
+        if self._gateway:
+            for pattern, overrides in self._gateway.model_overrides:
+                if pattern in model_lower:
+                    kwargs.update(overrides)
+                    return
     
     async def chat(
         self,
@@ -113,45 +146,25 @@ class LiteLLMProvider(LLMProvider):
         
         Routes to OpenCode Zen direct HTTP or LiteLLM based on provider detection.
         """
-        model = model or self.default_model
+        raw_model = model or self.default_model
         
         # OpenCode Zen: Use direct HTTP (required for User-Agent header)
-        if self.is_opencode or model.startswith("opencode/"):
+        if self.is_opencode or raw_model.lower().startswith("opencode/"):
+            # Strip prefix for OpenCode
+            clean_model = raw_model
+            if clean_model.lower().startswith("opencode/"):
+                clean_model = clean_model.split("/", 1)[1]
             return await self._opencode_chat(
-                model=model.replace("opencode/", ""),
+                model=clean_model,
                 messages=messages,
                 tools=tools,
                 max_tokens=max_tokens,
                 temperature=temperature,
             )
         
-
-        
         # All other providers: Use LiteLLM
-        return await self._litellm_chat(
-            model=model,
-            messages=messages,
-            tools=tools,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
-    
-    async def _litellm_chat(
-        self,
-        model: str,
-        messages: list[dict[str, Any]],
-        tools: list[dict[str, Any]] | None = None,
-        max_tokens: int = 4096,
-        temperature: float = 0.7,
-    ) -> LLMResponse:
-        """Send chat request via LiteLLM."""
-        # Apply model prefix based on provider
-        model = self._apply_model_prefix(model)
+        model = self._resolve_model(raw_model)
         
-        # kimi-k2.5 only supports temperature=1.0
-        if "kimi-k2.5" in model.lower():
-            temperature = 1.0
-
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": messages,
@@ -159,8 +172,16 @@ class LiteLLMProvider(LLMProvider):
             "temperature": temperature,
         }
         
+        # Apply model-specific overrides (e.g. kimi-k2.5 temperature)
+        self._apply_model_overrides(model, kwargs)
+        
+        # Pass api_base directly for custom endpoints (vLLM, etc.)
         if self.api_base:
             kwargs["api_base"] = self.api_base
+        
+        # Pass extra headers (e.g. APP-Code for AiHubMix)
+        if self.extra_headers:
+            kwargs["extra_headers"] = self.extra_headers
         
         if tools:
             kwargs["tools"] = tools
@@ -174,28 +195,6 @@ class LiteLLMProvider(LLMProvider):
                 content=f"Error calling LLM: {str(e)}",
                 finish_reason="error",
             )
-    
-    def _apply_model_prefix(self, model: str) -> str:
-        """Apply correct LiteLLM prefix based on provider."""
-        model_lower = model.lower()
-        
-        if self.is_openrouter and not model.startswith("openrouter/"):
-            return f"openrouter/{model}"
-        
-        if self.is_vllm:
-            return f"hosted_vllm/{model}"
-        
-        # Standard provider prefixes
-        if ("glm" in model_lower or "zhipu" in model_lower) and not model.startswith(("zhipu/", "zai/")):
-            return f"zai/{model}"
-        
-        if ("moonshot" in model_lower or "kimi" in model_lower) and not model.startswith("moonshot/"):
-            return f"moonshot/{model}"
-        
-        if "gemini" in model_lower and not model.startswith("gemini/"):
-            return f"gemini/{model}"
-        
-        return model
     
     def _parse_litellm_response(self, response: Any) -> LLMResponse:
         """Parse LiteLLM response into standard format."""
@@ -292,8 +291,12 @@ class LiteLLMProvider(LLMProvider):
     def _get_opencode_url(self) -> str:
         """Get OpenCode Zen API URL from configured api_base."""
         if not self.api_base:
-            raise ValueError("api_base is required for OpenCode. Configure it in config.json under providers.opencode.apiBase")
-        base = self.api_base
+            # Use default from registry
+            from nanobot.providers.registry import find_by_name
+            spec = find_by_name("opencode")
+            base = spec.default_api_base if spec else "https://opencode.ai/zen/v1"
+        else:
+            base = self.api_base
         if not base.endswith("/chat/completions"):
             base = f"{base.rstrip('/')}/chat/completions"
         return base
@@ -352,5 +355,3 @@ class LiteLLMProvider(LLMProvider):
     def get_default_model(self) -> str:
         """Get the default model."""
         return self.default_model
-
-

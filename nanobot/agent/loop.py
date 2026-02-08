@@ -50,6 +50,7 @@ class AgentLoop:
         cron_service: "CronService | None" = None,
         restrict_to_workspace: bool = False,
         config: "Config | None" = None,
+        session_manager: SessionManager | None = None,
     ):
         from nanobot.config.schema import ExecToolConfig, Config
         from nanobot.cron.service import CronService
@@ -68,7 +69,7 @@ class AgentLoop:
         self._session_overrides: dict[str, str] = {}
         
         self.context = ContextBuilder(workspace)
-        self.sessions = SessionManager(workspace)
+        self.sessions = session_manager or SessionManager(workspace)
         self.tools = ToolRegistry()
         self.tool_logger = ToolLogger(workspace)
         self.commands = CommandHandler()
@@ -131,7 +132,7 @@ class AgentLoop:
         # Convert config to dict with provider info
         providers = {}
         if hasattr(self.config, 'providers'):
-            for provider_name in ['opencode', 'openrouter', 'anthropic', 'openai', 'gemini']:
+            for provider_name in ['opencode', 'openrouter', 'anthropic', 'openai', 'gemini', 'aihubmix', 'kilocode']:
                 provider = getattr(self.config.providers, provider_name, None)
                 if provider:
                     providers[provider_name] = {
@@ -190,8 +191,8 @@ class AgentLoop:
         if msg.channel == "system":
             return await self._process_system_message(msg)
         
-        logger.info(f"Processing message from {msg.channel}:{msg.sender_id}")
-        logger.debug(f"DEBUG MSG CONTENT: '{msg.content}'")
+        preview = msg.content[:80] + "..." if len(msg.content) > 80 else msg.content
+        logger.info(f"Processing message from {msg.channel}:{msg.sender_id}: {preview}")
         
         # Get or create session (check for overrides first)
         original_session_key = msg.session_key
@@ -278,9 +279,14 @@ class AgentLoop:
                 
                 # Execute tools
                 for tool_call in response.tool_calls:
-                    args_str = json.dumps(tool_call.arguments)
-                    logger.debug(f"Executing tool: {tool_call.name} with arguments: {args_str}")
-                    result = await self.tools.execute(tool_call.name, tool_call.arguments, session_key=session_key, logger=self.tool_logger)
+                    args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
+                    logger.info(f"Tool call: {tool_call.name}({args_str[:200]})")
+                    result = await self.tools.execute(
+                        tool_call.name, 
+                        tool_call.arguments, 
+                        session_key=session_key, 
+                        logger=self.tool_logger
+                    )
                     messages = self.context.add_tool_result(
                         messages, tool_call.id, tool_call.name, result
                     )
@@ -291,6 +297,10 @@ class AgentLoop:
         
         if final_content is None:
             final_content = "I've completed processing but have no response to give."
+        
+        # Log response preview
+        preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
+        logger.info(f"Response to {msg.channel}:{msg.sender_id}: {preview}")
         
         # Save to session
         session.add_message("user", msg.content)
@@ -377,9 +387,14 @@ class AgentLoop:
                 )
                 
                 for tool_call in response.tool_calls:
-                    args_str = json.dumps(tool_call.arguments)
-                    logger.debug(f"Executing tool: {tool_call.name} with arguments: {args_str}")
-                    result = await self.tools.execute(tool_call.name, tool_call.arguments, session_key=session_key, logger=self.tool_logger)
+                    args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
+                    logger.info(f"Tool call: {tool_call.name}({args_str[:200]})")
+                    result = await self.tools.execute(
+                        tool_call.name, 
+                        tool_call.arguments, 
+                        session_key=session_key, 
+                        logger=self.tool_logger
+                    )
                     messages = self.context.add_tool_result(
                         messages, tool_call.id, tool_call.name, result
                     )
